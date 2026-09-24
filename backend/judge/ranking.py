@@ -20,6 +20,17 @@ from backend.utils import now_iso, now_ts, parse_time
 RANKING_FILE = "ranking.json"
 
 
+def _penalty_seconds():
+    """从系统设置读取 ACM 单次错误提交罚时，缺省为 20 分钟。"""
+    default = int(config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"])
+    settings = read_json(config.SETTINGS_FILE, default={}) or {}
+    ranking_settings = settings.get("ranking", {}) or {}
+    try:
+        return max(0, int(ranking_settings.get("penalty_seconds", default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def contest_status(contest, ts=None):
     """返回竞赛状态：upcoming | running | ended。"""
     ts = ts or now_ts()
@@ -38,7 +49,7 @@ def contest_elapsed(contest, ts=None):
     start = parse_time(contest.get("start_time"))
     if start is None or ts <= start:
         return 0
-    return int(ts - start) + 28800
+    return int(ts - start)
 
 
 def _score_dir(contest_id):
@@ -78,7 +89,10 @@ def _summarize(record, mode, penalty_seconds):
             solved += 1
         score += p.get("score", 0)
         penalty += p.get("penalty", 0)
-        total_time_ms += p.get("time_ms", 0)
+        if mode == "ioi":
+            total_time_ms = max(total_time_ms, p.get("time_ms", 0))
+        else:
+            total_time_ms += p.get("time_ms", 0)
     return {
         "user_id": record["user_id"],
         "username": record.get("username", ""),
@@ -93,10 +107,21 @@ def _summarize(record, mode, penalty_seconds):
 
 def _sort_key(row, mode):
     if mode == "acm":
-        # 解题数降序，罚时升序，用时升序
-        return (-row["solved"], -row["penalty"], row["user_id"])
+        # 解题数降序，罚时升序，用户 ID 升序作为稳定兜底
+        return (-row["solved"], row["penalty"], row["user_id"])
     # ioi：总分降序，用时升序
     return (-row["score"], row["total_time_ms"], row["user_id"])
+
+
+def _ranking_is_current(contest, data, penalty_seconds):
+    """检查聚合榜单是否仍符合当前竞赛模式和罚时设置。"""
+    if not data or data.get("mode") != contest.get("mode", "acm"):
+        return False
+    if data.get("penalty_seconds") != penalty_seconds:
+        return False
+    rows = data.get("rows", [])
+    expected = sorted(rows, key=lambda r: _sort_key(r, contest.get("mode", "acm")))
+    return [r.get("user_id") for r in rows] == [r.get("user_id") for r in expected]
 
 
 def _rebuild_ranking(contest_id, mode, penalty_seconds):
@@ -115,6 +140,7 @@ def _rebuild_ranking(contest_id, mode, penalty_seconds):
     data = {
         "contest_id": contest_id,
         "mode": mode,
+        "penalty_seconds": penalty_seconds,
         "updated_at": now_iso(),
         "frozen_at": None,
         "frozen_snapshot": None,
@@ -151,7 +177,7 @@ def record_submission(contest, user, problem_id, result):
     该函数在评测线程中调用，通过 storage 的文件级锁保证并发安全。
     """
     mode = contest.get("mode", "acm")
-    penalty_seconds = int(config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"])
+    penalty_seconds = _penalty_seconds()
     contest_id = contest["id"]
     user_id = user["id"]
 
@@ -165,6 +191,9 @@ def record_submission(contest, user, problem_id, result):
             "solved": False, "attempts": 0, "first_solve_time": None,
             "score": 0, "time_ms": 0, "memory_kb": 0, "penalty": 0,
         })
+        if mode == "acm" and p.get("solved"):
+            # ACM 首次 AC 后该题即结算，后续提交不再影响榜单。
+            return rec
         p["attempts"] += 1
         p["time_ms"] = max(p["time_ms"], result.get("time_ms", 0))
         p["memory_kb"] = max(p["memory_kb"], result.get("memory_kb", 0))
@@ -217,6 +246,11 @@ def get_leaderboard(contest, as_admin=False):
     """获取榜单。封榜期间非管理员看到冻结快照。"""
     path = _ranking_path(contest["id"])
     data = read_json(path)
+    penalty_seconds = _penalty_seconds()
+    if data is None and os.path.isdir(_score_dir(contest["id"])):
+        data = rebuild_contest_ranking(contest)
+    elif not _ranking_is_current(contest, data, penalty_seconds):
+        data = rebuild_contest_ranking(contest)
     if data is None:
         return {"contest_id": contest["id"], "rows": [], "frozen": False,
                 "frozen_at": None, "updated_at": None}
@@ -238,6 +272,15 @@ def get_leaderboard(contest, as_admin=False):
 def get_user_record(contest_id, user_id):
     """读取单个用户在竞赛中的成绩分片。"""
     return read_json(_user_path(contest_id, user_id))
+
+
+def rebuild_contest_ranking(contest):
+    """根据当前成绩分片重建指定竞赛的聚合榜单。"""
+    mode = contest.get("mode", "acm")
+    penalty_seconds = _penalty_seconds()
+    ranking = _rebuild_ranking(contest["id"], mode, penalty_seconds)
+    locked_update(_ranking_path(contest["id"]), lambda _d: ranking, default=ranking)
+    return ranking
 
 
 def reset_contest_scores(contest_id):

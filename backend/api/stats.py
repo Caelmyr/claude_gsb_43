@@ -16,8 +16,13 @@ stats_bp = Blueprint("stats", __name__)
 
 def _iter_submissions():
     """遍历所有提交分片，产出提交记录。"""
-    for s in list(engine._recent):
-        yield s
+    for cid in list_dirs(config.SUBMISSIONS_DIR):
+        cdir = os.path.join(config.SUBMISSIONS_DIR, cid)
+        for uid in list_files(cdir):
+            shard = read_json(os.path.join(cdir, f"{uid}.json"))
+            if not shard:
+                continue
+            yield from shard.get("submissions", [])
 
 
 def _iter_problems():
@@ -51,13 +56,13 @@ def overview():
         verdict_counter[st] += 1
         lang_counter[s.get("language", "?")] += 1
         problem_counter[s.get("problem_id")] += 1
-        user_counter[s.get("username", s.get("user_id"))] += 1
+        user_counter[s.get("user_id") or s.get("username")] += 1
         if st == "AC":
             ac += 1
             problem_ac[prob_key(s)] += 1
         t = parse_time(s.get("created_at"))
         if t is not None and t >= cutoff:
-            hour_counter[datetime.utcfromtimestamp(t).strftime("%Y-%m-%dT%H")] += 1
+            hour_counter[datetime.fromtimestamp(t).strftime("%Y-%m-%dT%H")] += 1
 
     # 填充 24 小时时间轴（缺失小时补 0）
     hours = []

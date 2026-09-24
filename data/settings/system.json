@@ -17,7 +17,7 @@
     "window_seconds": 60
   },
   "ranking": {
-    "penalty_seconds": 20
+    "penalty_seconds": 1200
   },
   "registration": {
     "allow": true

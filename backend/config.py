@@ -47,7 +47,7 @@ DEFAULT_SETTINGS = {
         "window_seconds": 60,              # 相似提交的检测时间窗
     },
     "ranking": {
-        "penalty_seconds": 20,                # ACM 每次错误提交罚时（秒）
+        "penalty_seconds": 1200,              # ACM 每次错误提交罚时（20 分钟）
     },
     "registration": {
         "allow": True,

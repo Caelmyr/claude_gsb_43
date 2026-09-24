@@ -19,7 +19,7 @@ from datetime import datetime
 
 from backend import config
 from backend.storage import read_json, locked_update, list_files, list_dirs
-from backend.utils import now_iso, now_ts, gen_id, truncate, prob_key, strip_code, page_rows, sort_list
+from backend.utils import now_iso, now_ts, gen_id, truncate, strip_code, page_rows, sort_list
 from backend.sandbox import get_sandbox, ST_OK, ST_TLE, ST_MLE, ST_OLE, ST_RE, ST_CE, ST_SE
 from backend.judge import comparator
 from backend.judge import ranking
@@ -253,15 +253,15 @@ class JudgeEngine:
                        compile_result["message"], max_time, max_mem)
         shutil.rmtree(workdir, ignore_errors=True)
 
-        # 4) 增量更新排行榜
-        if contest is not None and contest.get("visble", True):
+        # 4) 增量更新竞赛排行榜（练习模式不记分）
+        if contest is not None and contest_id != "practice" and contest.get("visible", True):
             user = {"id": user_id, "username": sub.get("username", ""),
                     "nickname": sub.get("nickname", "")}
             try:
-                ranking.record_submission(contest, user, prob_key(sub), {
+                ranking.record_submission(contest, user, sub.get("problem_id"), {
                     "status": final_status,
                     "score": total_score,
-                    "time_ms": 0,
+                    "time_ms": max_time,
                     "memory_kb": max_mem,
                 })
             except Exception:
@@ -447,8 +447,8 @@ class JudgeEngine:
                         rows.append(s)
             else:
                 rows = [s for s in recent
-                        if (not user_id or s.get("username") == user_id)
-                        and (not problem_id or s["problem_id"] == problem_id)]
+                        if (not user_id or s.get("user_id") == user_id)
+                        and (not problem_id or s.get("problem_id") == problem_id)]
 
         rows = sort_list(rows, key=lambda s: s.get("created_at", ""), reverse=True)
         total = len(rows)

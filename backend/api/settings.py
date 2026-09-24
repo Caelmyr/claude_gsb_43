@@ -11,11 +11,19 @@ settings_bp = Blueprint("settings", __name__)
 _PUBLIC_KEYS = ("site_name", "registration")
 
 
+def _deep_merge(base, override):
+    result = dict(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def _load():
     data = read_json(config.SETTINGS_FILE, config.DEFAULT_SETTINGS) or {}
-    merged = dict(config.DEFAULT_SETTINGS)
-    merged.update(data)
-    return merged
+    return _deep_merge(config.DEFAULT_SETTINGS, data)
 
 
 @settings_bp.get("/settings")
