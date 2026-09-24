@@ -23,10 +23,9 @@ def leaderboard(contest_id):
     if not contest:
         return err("竞赛不存在", 404)
     as_admin = request.user.get("role") == "admin"
-    if not contest.get("visble", True) and not as_admin:
+    if not contest.get("visible", True) and not as_admin:
         return err("竞赛不存在", 404)
     data = get_leaderboard(contest, as_admin=as_admin)
-    data["rows"] = sorted(data.get("rows", []), key=lambda r: r.get("penalty", 0))
     data["contest_status"] = contest_status(contest)
     data["frozen_now"] = frozen_now(contest)
     data["freeze_time"] = contest.get("freeze_time")

@@ -15,7 +15,13 @@ import os
 
 from backend import config
 from backend.storage import read_json, locked_update, list_files
-from backend.utils import now_iso, now_ts, parse_time
+from backend.utils import now_iso, now_ts, parse_time, gen_id
+
+
+def _ranking_settings():
+    settings = read_json(config.SETTINGS_FILE, config.DEFAULT_SETTINGS) or {}
+    return settings.get("ranking", config.DEFAULT_SETTINGS["ranking"])
+
 
 RANKING_FILE = "ranking.json"
 
@@ -38,7 +44,7 @@ def contest_elapsed(contest, ts=None):
     start = parse_time(contest.get("start_time"))
     if start is None or ts <= start:
         return 0
-    return int(ts - start) + 28800
+    return int(ts - start)
 
 
 def _score_dir(contest_id):
@@ -79,6 +85,11 @@ def _summarize(record, mode, penalty_seconds):
         score += p.get("score", 0)
         penalty += p.get("penalty", 0)
         total_time_ms += p.get("time_ms", 0)
+    public_problems = {}
+    for pid, p in record.get("problems", {}).items():
+        public_problems[pid] = {
+            k: v for k, v in p.items() if k != "events"
+        }
     return {
         "user_id": record["user_id"],
         "username": record.get("username", ""),
@@ -87,14 +98,68 @@ def _summarize(record, mode, penalty_seconds):
         "score": score,
         "penalty": penalty,
         "total_time_ms": total_time_ms,
-        "problems": record.get("problems", {}),
+        "problems": public_problems,
     }
+
+
+def _event_elapsed(contest, event):
+    """提交发生时距离开赛的秒数。"""
+    created = parse_time(event.get("created_at"))
+    start = parse_time(contest.get("start_time"))
+    if created is not None and start is not None:
+        return max(0, int(created - start))
+    return contest_elapsed(contest)
+
+
+def _recalculate_problem(p, events, mode, contest, penalty_seconds):
+    """按提交历史重算单题成绩，保证重判不会重复累计提交次数。"""
+    ordered = sorted(events.items(), key=lambda item: (
+        item[1].get("created_at") or "", item[0]
+    ))
+    ordered = [event for _, event in ordered]
+    p.update({
+        "solved": False,
+        "attempts": 0,
+        "first_solve_time": None,
+        "score": 0,
+        "penalty": 0,
+        "time_ms": 0,
+        "memory_kb": 0,
+    })
+
+    if mode == "acm":
+        wrong_before = 0
+        for event in ordered:
+            status = event.get("status")
+            if status == "CE":
+                continue
+            p["attempts"] += 1
+            p["time_ms"] = max(p["time_ms"], event.get("time_ms", 0))
+            p["memory_kb"] = max(p["memory_kb"], event.get("memory_kb", 0))
+            if status == "AC":
+                p["solved"] = True
+                p["score"] = 1
+                p["first_solve_time"] = event.get("created_at") or now_iso()
+                p["penalty"] = (
+                    _event_elapsed(contest, event) + wrong_before * penalty_seconds
+                )
+                break
+            wrong_before += 1
+        return
+
+    for event in ordered:
+        if event.get("status") == "CE":
+            continue
+        p["attempts"] += 1
+        p["score"] = max(p["score"], event.get("score", 0))
+        p["time_ms"] = max(p["time_ms"], event.get("time_ms", 0))
+        p["memory_kb"] = max(p["memory_kb"], event.get("memory_kb", 0))
 
 
 def _sort_key(row, mode):
     if mode == "acm":
         # 解题数降序，罚时升序，用时升序
-        return (-row["solved"], -row["penalty"], row["user_id"])
+        return (-row["solved"], row["penalty"], row["user_id"])
     # ioi：总分降序，用时升序
     return (-row["score"], row["total_time_ms"], row["user_id"])
 
@@ -144,14 +209,17 @@ def is_frozen(contest, ts=None):
     return True
 
 
-def record_submission(contest, user, problem_id, result):
+def record_submission(contest, user, problem_id, result, submission_id=None):
     """在评测完成后增量更新该用户的成绩分片与聚合榜单。
 
     result 由评测引擎给出，包含 status / score / time_ms / memory_kb 等。
     该函数在评测线程中调用，通过 storage 的文件级锁保证并发安全。
     """
     mode = contest.get("mode", "acm")
-    penalty_seconds = int(config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"])
+    ranking_settings = _ranking_settings()
+    penalty_seconds = int(ranking_settings.get(
+        "penalty_seconds", config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"]
+    ))
     contest_id = contest["id"]
     user_id = user["id"]
 
@@ -164,24 +232,18 @@ def record_submission(contest, user, problem_id, result):
         p = probs.setdefault(problem_id, {
             "solved": False, "attempts": 0, "first_solve_time": None,
             "score": 0, "time_ms": 0, "memory_kb": 0, "penalty": 0,
+            "events": {},
         })
-        p["attempts"] += 1
-        p["time_ms"] = max(p["time_ms"], result.get("time_ms", 0))
-        p["memory_kb"] = max(p["memory_kb"], result.get("memory_kb", 0))
-
-        accepted = result.get("status") == "AC"
-        if accepted:
-            p["solved"] = True
-            if p["first_solve_time"] is None:
-                elapsed = contest_elapsed(contest)
-                p["first_solve_time"] = now_iso()
-                if mode == "acm":
-                    wrong_before = p["attempts"] - 1
-                    p["penalty"] = elapsed + wrong_before * penalty_seconds
-        if mode == "ioi":
-            p["score"] = max(p["score"], result.get("score", 0))
-        elif mode == "acm":
-            p["score"] = 1 if p["solved"] else 0
+        events = p.setdefault("events", {})
+        event_id = submission_id or f"manual-{gen_id()}"
+        events[event_id] = {
+            "status": result.get("status"),
+            "score": result.get("score", 0),
+            "time_ms": result.get("time_ms", 0),
+            "memory_kb": result.get("memory_kb", 0),
+            "created_at": result.get("created_at") or now_iso(),
+        }
+        _recalculate_problem(p, events, mode, contest, penalty_seconds)
         return rec
 
     user_path = _user_path(contest_id, user_id)
@@ -196,20 +258,23 @@ def record_submission(contest, user, problem_id, result):
 
 def _maybe_freeze_snapshot(contest):
     """封榜时刻到达时，捕获当前榜单作为冻结快照（只捕获一次）。"""
-    if is_frozen(contest):
+    if not is_frozen(contest):
         return
     path = _ranking_path(contest["id"])
     existing = read_json(path)
-    if existing is None or existing.get("frozen_snapshot") is not None:
+    if existing is not None and existing.get("frozen_snapshot") is not None:
         return
-    rows = existing.get("rows", [])
+    rows = (existing or {}).get("rows", [])
     # 冻结快照深拷贝（避免后续内部分片变动污染）
     import copy
     snapshot = copy.deepcopy(rows)
     for i, r in enumerate(snapshot):
         r["rank"] = i + 1
+    frozen_at = now_iso()
+    if existing is None:
+        existing = {"contest_id": contest["id"], "rows": rows}
     existing["frozen_snapshot"] = snapshot
-    existing["frozen_at"] = now_iso()
+    existing["frozen_at"] = frozen_at
     locked_update(path, lambda _d: existing, default=existing)
 
 

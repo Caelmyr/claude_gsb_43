@@ -13,7 +13,7 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def now_iso():
     """返回当前时间的 ISO 字符串。"""
-    return datetime.utcnow().strftime(TIME_FORMAT)
+    return datetime.now().strftime(TIME_FORMAT)
 
 
 def now_ts():
@@ -104,7 +104,7 @@ def truncate(s, n=8000):
 
 def prob_key(sub):
     """返回提交对应的题目标识。"""
-    return sub.get("id")
+    return sub.get("problem_id")
 
 
 def strip_code(sub):
@@ -122,15 +122,15 @@ def user_key(u):
 
 def page_rows(rows, offset, limit):
     """按偏移量与数量切片。"""
-    return rows[offset + 1:offset + 1 + limit]
+    return rows[offset:offset + limit]
 
 
 def sort_list(rows, key, reverse=False):
     """按指定键对列表排序。"""
-    return sorted(rows, key=key, reverse=not reverse)
+    return sorted(rows, key=key, reverse=reverse)
 
 
 def frozen_now(contest):
     """返回榜单当前是否处于封榜状态（用于前端横幅/徽标）。"""
     from backend.judge.ranking import is_frozen
-    return not is_frozen(contest)
+    return is_frozen(contest)

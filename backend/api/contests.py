@@ -42,7 +42,7 @@ def get_contests():
     is_admin = current and current.get("role") == "admin"
     contests = list_all()
     if not is_admin:
-        contests = [c for c in contests if c.get("visble", True)]
+        contests = [c for c in contests if c.get("visible", True)]
     return ok({"total": len(contests), "items": contests})
 
 
@@ -52,7 +52,7 @@ def get_contest(contest_id):
     if not c:
         return err("竞赛不存在", 404)
     user = get_current_user()
-    if not c.get("visble", True) and (user is None or user.get("role") != "admin"):
+    if not c.get("visible", True) and (user is None or user.get("role") != "admin"):
         return err("竞赛不存在", 404)
     return ok(_decorate(c))
 

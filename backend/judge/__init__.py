@@ -254,16 +254,17 @@ class JudgeEngine:
         shutil.rmtree(workdir, ignore_errors=True)
 
         # 4) 增量更新排行榜
-        if contest is not None and contest.get("visble", True):
+        if contest is not None and contest.get("visible", True):
             user = {"id": user_id, "username": sub.get("username", ""),
                     "nickname": sub.get("nickname", "")}
             try:
                 ranking.record_submission(contest, user, prob_key(sub), {
                     "status": final_status,
                     "score": total_score,
-                    "time_ms": 0,
+                    "time_ms": max_time,
                     "memory_kb": max_mem,
-                })
+                    "created_at": sub.get("created_at"),
+                }, submission_id=sub_id)
             except Exception:
                 pass
 
@@ -440,14 +441,14 @@ class JudgeEngine:
                     if not shard:
                         continue
                     for s in shard.get("submissions", []):
-                        if user_id and s["user_id"] != user_id:
+                        if user_id and s["user_id"] != user_id and s.get("username") != user_id:
                             continue
                         if problem_id and s["problem_id"] != problem_id:
                             continue
                         rows.append(s)
             else:
                 rows = [s for s in recent
-                        if (not user_id or s.get("username") == user_id)
+                        if (not user_id or s.get("user_id") == user_id or s.get("username") == user_id)
                         and (not problem_id or s["problem_id"] == problem_id)]
 
         rows = sort_list(rows, key=lambda s: s.get("created_at", ""), reverse=True)

@@ -57,7 +57,7 @@ def overview():
             problem_ac[prob_key(s)] += 1
         t = parse_time(s.get("created_at"))
         if t is not None and t >= cutoff:
-            hour_counter[datetime.utcfromtimestamp(t).strftime("%Y-%m-%dT%H")] += 1
+            hour_counter[datetime.fromtimestamp(t).strftime("%Y-%m-%dT%H")] += 1
 
     # 填充 24 小时时间轴（缺失小时补 0）
     hours = []
